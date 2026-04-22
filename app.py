@@ -135,11 +135,54 @@ def read_8025(f):
 
 @st.cache_data(show_spinner=False)
 def read_1464(f):
-    """Lê Excel da rotina 1464 (sem cabeçalho)"""
+    """Lê Excel da rotina 1464 (sem cabeçalho) — suporta xls, xlsx e formatos legados do Winthor"""
+    fname = getattr(f, 'name', str(f)).lower()
+    errors = []
+
+    # Estratégia 1: openpyxl (xlsx padrão)
     try:
         df = pd.read_excel(f, header=None, engine='openpyxl')
-    except Exception:
-        df = pd.read_excel(f, header=None)
+        if df.shape[0] > 0:
+            return _fix_1464_cols(df)
+    except Exception as e:
+        errors.append(f"openpyxl: {e}")
+
+    # Estratégia 2: xlrd (xls antigo e alguns xlsx do Winthor)
+    try:
+        if hasattr(f, 'seek'): f.seek(0)
+        df = pd.read_excel(f, header=None, engine='xlrd')
+        if df.shape[0] > 0:
+            return _fix_1464_cols(df)
+    except Exception as e:
+        errors.append(f"xlrd: {e}")
+
+    # Estratégia 3: calamine (lida com formatos corrompidos/legados)
+    try:
+        if hasattr(f, 'seek'): f.seek(0)
+        df = pd.read_excel(f, header=None, engine='calamine')
+        if df.shape[0] > 0:
+            return _fix_1464_cols(df)
+    except Exception as e:
+        errors.append(f"calamine: {e}")
+
+    # Estratégia 4: CSV como fallback (Winthor às vezes exporta .xlsx que são CSV renomeados)
+    try:
+        if hasattr(f, 'seek'): f.seek(0)
+        raw = f.read()
+        if hasattr(f, 'seek'): f.seek(0)
+        text = raw.decode('utf-8', errors='replace')
+        import io as _io
+        df = pd.read_csv(_io.StringIO(text), sep=';', decimal=',', header=None)
+        if df.shape[0] > 0:
+            return _fix_1464_cols(df)
+    except Exception as e:
+        errors.append(f"csv-fallback: {e}")
+
+    raise ValueError(f"Não foi possível ler o arquivo 1464. Tentativas: {'; '.join(errors)}")
+
+
+def _fix_1464_cols(df):
+    """Aplica nomes de colunas e limpeza ao DataFrame da 1464"""
     if df.shape[1] >= 14:
         cols = COLS_1464[:df.shape[1]]
         if df.shape[1] > len(cols):
@@ -147,6 +190,9 @@ def read_1464(f):
         df.columns = cols
     for c in df.select_dtypes('object').columns:
         df[c] = df[c].astype(str).str.strip()
+    # Garantir que VALOR seja numérico
+    if 'VALOR' in df.columns:
+        df['VALOR'] = pd.to_numeric(df['VALOR'].astype(str).str.replace(',', '.'), errors='coerce').fillna(0)
     return df
 
 
